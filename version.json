@@ -1,0 +1,9 @@
+{
+    "version": "1.0.0",
+    "description": "Initial Release with Smart Common Finder and Turbo Performance.",
+    "changelog": [
+        "Added Smart Common Value Finder",
+        "Optimized DuckDB for 5GB+ files",
+        "Fixed LogicalType and duplicate key errors"
+    ]
+}

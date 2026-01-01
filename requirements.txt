@@ -1,0 +1,5 @@
+duckdb
+prompt_toolkit
+rich
+streamlit
+pandas

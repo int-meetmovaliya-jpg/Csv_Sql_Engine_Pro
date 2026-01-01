@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+
+# PyInstaller
+*.spec.bak
+*.manifest
+# Allow .spec files (they're needed for building)
+# *.spec
+
+# DMG files
+*.dmg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Application specific
+metadata.db
+metadata.db.tmp/
+history/
+output/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+schemas/
+temp_update/
+update.zip
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.local
+
