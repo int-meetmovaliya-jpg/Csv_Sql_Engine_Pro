@@ -4,6 +4,7 @@
 
 1. Python 3.9+ installed
 2. All dependencies installed: `pip install -r requirements.txt`
+   - This includes PyQt5 and PyQtWebEngine for native macOS window support
 3. PyInstaller installed: `pip install pyinstaller`
 
 ## Build Steps
@@ -59,7 +60,9 @@ Users who have the app installed will:
 ## Notes
 
 - The `bootstrap.py` file is the entry point for the application
+- The app runs as a **native macOS application** using PyQt5, not as a browser-based localhost server
 - Updates are downloaded from the GitHub repository's main branch
 - User data and preferences are preserved during updates
 - The update system checks `version.json` in the GitHub repository
+- The app uses `native_window.py` to embed Streamlit in a native macOS window
 

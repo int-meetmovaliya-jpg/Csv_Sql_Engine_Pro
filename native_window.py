@@ -69,10 +69,7 @@ class NativeStreamlitWindow(QMainWindow):
         # Set window properties for macOS
         self.setWindowIcon(QIcon())
         
-        # macOS specific: Set unified title bar style
-        if sys.platform == 'darwin':
-            # Enable native macOS look
-            self.setUnifiedTitleAndToolBarOnMac(True)
+        # macOS specific styling (PyQt5 handles native look automatically)
         
     def center_window(self):
         """Center the window on the screen"""
