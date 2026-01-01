@@ -11,6 +11,9 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('PyQt5')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
+# Exclude problematic PyQt5 modules that cause symlink issues
+exclude_modules = ['PyQt5.QtBluetooth', 'PyQt5.QtNfc', 'PyQt5.Qt3D', 'PyQt5.QtGamepad', 'PyQt5.Qt3DCore', 'PyQt5.Qt3DRender', 'PyQt5.Qt3DInput', 'PyQt5.Qt3DLogic', 'PyQt5.Qt3DAnimation', 'PyQt5.Qt3DExtras', 'PyQt5.Qt3DQuick', 'PyQt5.Qt3DQuickScene2D', 'PyQt5.QtPdf', 'PyQt5.QtBodymovin']
+
 
 a = Analysis(
     ['bootstrap.py'],
@@ -21,7 +24,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=exclude_modules,
     noarchive=False,
     optimize=0,
 )
