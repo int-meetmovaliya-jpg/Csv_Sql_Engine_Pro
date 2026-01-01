@@ -5,6 +5,11 @@ import os
 from datetime import datetime
 import re
 from streamlit_ace import st_ace
+from utils import (
+    validate_table_name, validate_file_upload, sanitize_table_name,
+    validate_sql_query, create_query_hash, safe_execute, paginate_dataframe,
+    MAX_FILE_SIZE, MAX_RESULT_ROWS, PAGINATION_SIZE
+)
 
 # --- Page Config ---
 st.set_page_config(
@@ -33,10 +38,9 @@ if 'active_tool' not in st.session_state:
 # --- Custom Styling ---
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
-    
+    /* Using system fonts for better performance - no external font loading */
     html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
     }
     
     .main {
@@ -165,29 +169,25 @@ if 'con' not in st.session_state:
     try:
         st.session_state.con = duckdb.connect("metadata.db", read_only=False)
         st.session_state.read_only = False
-    except:
+    except duckdb.IOException as e:
+        st.warning(f"Database file error: {e}. Using in-memory database.")
+        st.session_state.con = duckdb.connect(":memory:")
+        st.session_state.read_only = True
+    except Exception as e:
+        st.error(f"Failed to connect to database: {e}")
         st.session_state.con = duckdb.connect(":memory:")
         st.session_state.read_only = True
     
-    # --- OPTIMIZED HARDWARE TUNING (No-Lag Mode) ---
-    st.session_state.con.execute("SET memory_limit='10GB'")
-    st.session_state.con.execute("SET threads=4") # Balanced for smooth multitasking (Prevents Laptop Lag)
+    # --- OPTIMIZED HARDWARE TUNING for 10GB+ files ---
+    st.session_state.con.execute("SET memory_limit='16GB'")  # Increased for 10GB files
+    st.session_state.con.execute("SET threads=8")  # More threads for large file processing
     st.session_state.con.execute("SET preserve_insertion_order=false")
     st.session_state.con.execute("SET max_temp_directory_size='500GB'")
-    st.session_state.con.execute("SET allocator_flush_threshold='128MB'") # Keeps memory lean
+    st.session_state.con.execute("SET allocator_flush_threshold='256MB'")  # Increased for large files
     
-    # --- SMART FAST-START LOGIC ---
-    # Only ingest CSVs that aren't already in our persistent metadata.db
-    if os.path.exists("data"):
-        existing_tables = [t[0].lower() for t in st.session_state.con.execute("SHOW TABLES").fetchall()]
-        for f in os.listdir("data"):
-            if f.endswith(".csv"):
-                t_name = f.replace(".csv", "").replace("-", "_").replace(" ", "_").replace("(", "").replace(")", "").replace(".", "_").lower().strip("_")
-                if t_name not in existing_tables:
-                    try: 
-                        st.session_state.con.execute(f"CREATE TABLE {t_name} AS SELECT * FROM read_csv_auto('data/{f}')")
-                        st.session_state.con.execute(f"ANALYZE {t_name}") # Pre-calculate statistics for fast JOINs
-                    except: pass
+    # --- LAZY CSV LOADING - Don't load all CSVs on startup ---
+    # Tables will be created on-demand when ingested or queried
+    # This significantly improves startup time
     
     st.session_state.con.execute("CHECKPOINT") # Persist and compact
 
@@ -319,6 +319,7 @@ with st.sidebar:
 
     # 📥 Ingestion
     st.header("📥 Ingest Data")
+    st.caption(f"Maximum file size: {MAX_FILE_SIZE / 1024 / 1024 / 1024:.0f}GB")
     uploads = st.file_uploader("Upload CSV", type=["csv"], accept_multiple_files=True, label_visibility="collapsed")
     
     # Process new uploads
@@ -326,22 +327,37 @@ with st.sidebar:
         for f in uploads:
             if f.name not in st.session_state.pending_files:
                 try:
-                    # 1. Save to disk immediately (Safe for 5GB+ and fixes LogicalType Error)
-                    os.makedirs("data", exist_ok=True)
-                    f_path = os.path.join("data", f.name)
-                    with open(f_path, "wb") as tmp_f:
-                        tmp_f.write(f.getbuffer())
+                    # 1. Validate file
+                    safe_filename = validate_file_upload(f)
                     
-                    # 2. Get Preview from Disk using Path (Robust)
-                    df_p = con.execute("SELECT * FROM read_csv_auto(?) LIMIT 10", [f_path]).df()
+                    # 2. Save to disk immediately (Safe for 10GB+ files)
+                    os.makedirs("data", exist_ok=True)
+                    f_path = os.path.join("data", safe_filename)
+                    
+                    # Show progress for large files
+                    with st.spinner(f"Uploading {f.name} ({f.size / 1024 / 1024 / 1024:.2f}GB)..."):
+                        with open(f_path, "wb") as tmp_f:
+                            tmp_f.write(f.getbuffer())
+                    
+                    # 3. Get Preview from Disk using Path (Robust, parameterized query)
+                    df_p = safe_execute(con, "SELECT * FROM read_csv_auto(?) LIMIT 10", [f_path]).df()
+                    
+                    # 4. Sanitize table name
+                    table_name = sanitize_table_name(safe_filename)
+                    validate_table_name(table_name)  # Additional validation
                     
                     st.session_state.pending_files[f.name] = {
                         "path": f_path, 
                         "columns": list(df_p.columns), 
                         "preview": df_p,
-                        "table_name": f.name.replace(".csv", "").replace("-", "_").replace(" ", "_").replace("(", "").replace(")", "").replace(".", "_").lower().strip("_")
+                        "table_name": table_name,
+                        "file_size": f.size
                     }
-                    st.toast(f"🚚 {f.name} saved to disk & ready!")
+                    st.toast(f"🚚 {f.name} saved to disk & ready! ({f.size / 1024 / 1024:.2f}MB)")
+                except ValueError as ve:
+                    st.error(f"Validation error for {f.name}: {ve}")
+                except duckdb.Error as de:
+                    st.error(f"Database error reading {f.name}: {de}")
                 except Exception as e:
                     st.error(f"Failed to read {f.name}: {e}")
 
@@ -370,18 +386,29 @@ with st.sidebar:
             if p_col3.button("⚡", key=f"qik_{fn}", use_container_width=True, help="Fast Ingest"):
                 try:
                     tn = info["table_name"]
-                    # Use path string to avoid TypeErrors
-                    con.execute(f'CREATE OR REPLACE TABLE "{tn}" AS SELECT * FROM read_csv_auto(?)', [info["path"]])
+                    validate_table_name(tn)  # Validate table name
                     
-                    # Auto-Index
+                    # Use parameterized query for safety
+                    safe_execute(con, f'CREATE OR REPLACE TABLE "{tn}" AS SELECT * FROM read_csv_auto(?)', [info["path"]])
+                    
+                    # Analyze for query optimization
+                    safe_execute(con, f'ANALYZE "{tn}"')
+                    
+                    # Auto-Index for performance
                     for c in info["columns"]:
-                        if any(k in c.lower() for k in ["id", "num", "phone", "email"]):
-                            try: con.execute(f'CREATE INDEX IF NOT EXISTS idx_{tn}_{c} ON "{tn}"("{c}")')
-                            except: pass
+                        if any(k in c.lower() for k in ["id", "num", "phone", "email", "code", "key"]):
+                            try:
+                                safe_execute(con, f'CREATE INDEX IF NOT EXISTS idx_{tn}_{c.lower().replace(" ", "_")} ON "{tn}"("{c}")')
+                            except Exception as idx_err:
+                                pass  # Index creation is optional
                     
                     del st.session_state.pending_files[fn]
                     st.toast(f"✅ Created table: {tn}")
                     st.rerun()
+                except ValueError as ve:
+                    st.error(f"Validation error: {ve}")
+                except duckdb.Error as de:
+                    st.error(f"Database error: {de}")
                 except Exception as e_q:
                     st.error(f"Quick load failed: {e_q}")
 
@@ -465,22 +492,30 @@ if st.session_state.editing_file:
         rc1, rc2 = st.columns(2)
         if rc1.button("🚀 Ingest Now", use_container_width=True, type="primary"):
             try:
-                # 1. Create table with renames in DuckDB (using disk path)
-                expr = ", ".join([f'"{old}" AS "{new}"' for old, new in renames.items()])
-                con.execute(f'CREATE OR REPLACE TABLE "{t_target}" AS SELECT {expr} FROM read_csv_auto(?)', [info["path"]])
+                # Validate table name
+                validate_table_name(t_target)
                 
-                # 2. Persist to backend CSV
+                # 1. Create table with renames in DuckDB (using parameterized query)
+                expr = ", ".join([f'"{old}" AS "{new}"' for old, new in renames.items()])
+                safe_execute(con, f'CREATE OR REPLACE TABLE "{t_target}" AS SELECT {expr} FROM read_csv_auto(?)', [info["path"]])
+                
+                # Analyze for query optimization
+                safe_execute(con, f'ANALYZE "{t_target}"')
+                
+                # 2. Persist to backend CSV (optional - table is already in DB)
                 os.makedirs("data", exist_ok=True)
                 target_path = os.path.join("data", f"{t_target}.csv")
-                con.execute(f'COPY "{t_target}" TO \'{target_path}\' (HEADER, DELIMITER \',\')')
+                # COPY doesn't support parameters, but t_target is validated
+                safe_execute(con, f'COPY "{t_target}" TO \'{target_path}\' (HEADER, DELIMITER \',\')')
                 
-                # 3. Auto-indexing for performance (Robust Optimization)
+                # 3. Auto-indexing for performance
                 for old, new in renames.items():
-                    col_low = new.lower()
+                    col_low = new.lower().replace(" ", "_")
                     if any(key in col_low for key in ["id", "num", "phone", "email", "code", "key"]):
                         try:
-                            con.execute(f'CREATE INDEX IF NOT EXISTS idx_{t_target}_{col_low} ON "{t_target}"("{new}")')
-                        except: pass
+                            safe_execute(con, f'CREATE INDEX IF NOT EXISTS idx_{t_target}_{col_low} ON "{t_target}"("{new}")')
+                        except Exception:
+                            pass  # Index creation is optional
                 
                 # 4. Cleanup session state
                 from versioning import save_schema_version
@@ -489,7 +524,12 @@ if st.session_state.editing_file:
                 st.session_state.editing_file = None
                 st.toast(f"✨ {t_target} ingested and optimized for performance!")
                 st.rerun()
-            except Exception as e: st.error(f"Error: {e}")
+            except ValueError as ve:
+                st.error(f"Validation error: {ve}")
+            except duckdb.Error as de:
+                st.error(f"Database error: {de}")
+            except Exception as e:
+                st.error(f"Error: {e}")
         if rc2.button("Cancel", use_container_width=True):
             st.session_state.editing_file = None
             st.rerun()
@@ -574,8 +614,8 @@ elif st.session_state.managing_table:
     tn = st.session_state.managing_table
     st.markdown(f"## ⚙️ Manage Table: {tn}")
     try:
-        c_info = con.execute(f'DESCRIBE "{tn}"').fetchall()
-        p_data = con.execute(f'SELECT * FROM "{tn}" LIMIT 5').df()
+        c_info = safe_execute(con, f'DESCRIBE "{tn}"').fetchall()
+        p_data = safe_execute(con, f'SELECT * FROM "{tn}" LIMIT 5').df()
         with st.container():
             st.markdown('<div class="table-container">', unsafe_allow_html=True)
             st.subheader("Preview")
@@ -596,28 +636,40 @@ elif st.session_state.managing_table:
             updates.sort(key=lambda x: x["pos"])
             mc_a, mc_b = st.columns(2)
             if mc_a.button("💾 Save Changes", use_container_width=True, type="primary"):
-                # 1. Rebuild table with new schema in session
-                sel = ", ".join([f'"{u["old"]}" AS "{u["new"]}"' for u in updates])
-                con.execute(f'CREATE TABLE "{tn}_new" AS SELECT {sel} FROM "{tn}"')
-                con.execute(f'DROP TABLE "{tn}"')
-                con.execute(f'ALTER TABLE "{tn}_new" RENAME TO "{tn}"')
-                
-                # 2. Sync to backend file storage
-                os.makedirs("data", exist_ok=True)
-                target_path = os.path.join("data", f"{tn}.csv")
-                con.execute(f'COPY "{tn}" TO \'{target_path}\' (HEADER, DELIMITER \',\')')
-                
-                # 3. High-Performance Indexing (Auto-Detected)
-                for u in updates:
-                    col = u["new"].lower()
-                    if any(key in col for key in ["id", "num", "phone", "email", "code", "key"]):
-                        try:
-                            con.execute(f'CREATE INDEX IF NOT EXISTS idx_{tn}_{col} ON "{tn}"("{u["new"]}")')
-                        except: pass
-                
-                st.session_state.managing_table = None
-                st.toast(f"✅ Changes & Performance Indexes persisted for: {tn}")
-                st.rerun()
+                try:
+                    # 1. Rebuild table with new schema in session
+                    sel = ", ".join([f'"{u["old"]}" AS "{u["new"]}"' for u in updates])
+                    safe_execute(con, f'CREATE TABLE "{tn}_new" AS SELECT {sel} FROM "{tn}"')
+                    safe_execute(con, f'DROP TABLE IF EXISTS "{tn}"')
+                    safe_execute(con, f'ALTER TABLE "{tn}_new" RENAME TO "{tn}"')
+                    
+                    # Analyze for query optimization
+                    safe_execute(con, f'ANALYZE "{tn}"')
+                    
+                    # 2. Sync to backend file storage
+                    os.makedirs("data", exist_ok=True)
+                    target_path = os.path.join("data", f"{tn}.csv")
+                    # COPY doesn't support parameters, but tn is from existing table name (safe)
+                    safe_execute(con, f'COPY "{tn}" TO \'{target_path}\' (HEADER, DELIMITER \',\')')
+                    
+                    # 3. High-Performance Indexing (Auto-Detected)
+                    for u in updates:
+                        col = u["new"].lower().replace(" ", "_")
+                        if any(key in col for key in ["id", "num", "phone", "email", "code", "key"]):
+                            try:
+                                safe_execute(con, f'CREATE INDEX IF NOT EXISTS idx_{tn}_{col} ON "{tn}"("{u["new"]}")')
+                            except Exception:
+                                pass  # Index creation is optional
+                    
+                    st.session_state.managing_table = None
+                    st.toast(f"✅ Changes & Performance Indexes persisted for: {tn}")
+                    st.rerun()
+                except ValueError as ve:
+                    st.error(f"Validation error: {ve}")
+                except duckdb.Error as de:
+                    st.error(f"Database error: {de}")
+                except Exception as e:
+                    st.error(f"Error saving changes: {e}")
             if mc_b.button("Close", use_container_width=True):
                 st.session_state.managing_table = None
                 st.rerun()
@@ -642,14 +694,14 @@ else:
     st.divider()
     st.markdown('<div class="progress-styled"></div>', unsafe_allow_html=True)
     
-    # --- Autocomplete Engine (Robust Schema Detection) ---
-    @st.cache_data(ttl=5)
+    # --- Autocomplete Engine (Optimized with longer cache) ---
+    @st.cache_data(ttl=300, show_spinner=False)  # Cache for 5 minutes instead of 5 seconds
     def get_sql_suggestions():
         try:
             # 1. Fetch all table names
-            tables = [t[0] for t in con.execute("SHOW TABLES").fetchall()]
+            tables = [t[0] for t in safe_execute(con, "SHOW TABLES").fetchall()]
             # 2. Fetch all column names across all tables
-            columns = [c[0] for c in con.execute("SELECT DISTINCT column_name FROM information_schema.columns").fetchall()]
+            columns = [c[0] for c in safe_execute(con, "SELECT DISTINCT column_name FROM information_schema.columns").fetchall()]
             
             # 3. Core SQL Keywords
             sql_keywords = [
@@ -665,7 +717,7 @@ else:
             # Combine, deduplicate, and sort
             suggestions = list(set(tables + columns + sql_keywords + macros))
             return sorted(suggestions)
-        except: 
+        except Exception as e:
             return ["SELECT", "FROM", "WHERE", "LIMIT"]
 
     suggestions = get_sql_suggestions()
@@ -704,11 +756,49 @@ else:
             if do_run:
                 from macros import expand_macros
                 try:
+                    # Validate query
+                    validate_sql_query(c_query)
                     p_query = expand_macros(c_query)
-                    t0 = datetime.now()
-                    res_df = con.execute(p_query).df()
-                    dur = (datetime.now() - t0).total_seconds()
-                    active_cells[i].update({"result": res_df, "error": None, "last_run_query": c_query, "meta": {"time": dur, "rows": len(res_df)}})
+                    
+                    # Query result caching
+                    query_hash = create_query_hash(p_query)
+                    cache_key = f"query_result_{query_hash}"
+                    
+                    # Check cache first
+                    if cache_key in st.session_state and st.session_state[cache_key].get("query") == p_query:
+                        cached_result = st.session_state[cache_key]
+                        res_df = cached_result["data"]
+                        dur = cached_result["time"]
+                        st.toast("⚡ Result from cache!", icon="⚡")
+                    else:
+                        # Execute query
+                        t0 = datetime.now()
+                        result = safe_execute(con, p_query)
+                        res_df = result.df()
+                        dur = (datetime.now() - t0).total_seconds()
+                        
+                        # Cache the result (limit cache size)
+                        if len(st.session_state) < 50:  # Limit cache entries
+                            st.session_state[cache_key] = {
+                                "query": p_query,
+                                "data": res_df,
+                                "time": dur
+                            }
+                    
+                    active_cells[i].update({
+                        "result": res_df, 
+                        "error": None, 
+                        "last_run_query": c_query, 
+                        "meta": {"time": dur, "rows": len(res_df), "query_hash": query_hash}
+                    })
+                except ValueError as ve:
+                    er = str(ve)
+                    active_cells[i].update({"result": "ERROR", "last_run_query": c_query, "error": {"msg": er}})
+                except duckdb.Error as de:
+                    er = str(de)
+                    lm = re.search(r"at line (\d+)", er)
+                    cm = re.search(r"column (\d+)", er)
+                    active_cells[i].update({"result": "ERROR", "last_run_query": c_query, "error": {"msg": er, "line": lm.group(1) if lm else None, "col": cm.group(1) if cm else None}})
                 except Exception as ex:
                     er = str(ex)
                     lm = re.search(r"at line (\d+)", er)
@@ -719,9 +809,46 @@ else:
                 res = active_cells[i]["result"]
                 if isinstance(res, pd.DataFrame):
                     meta = active_cells[i]["meta"]
+                    total_rows = meta['rows']
                     st.divider()
-                    st.caption(f"✨ Executed in {meta['time']:.4f}s • {meta['rows']} rows")
-                    st.dataframe(res, use_container_width=True, hide_index=True)
+                    
+                    # Show execution info
+                    cache_indicator = "⚡" if meta.get("query_hash") and f"query_result_{meta['query_hash']}" in st.session_state else ""
+                    st.caption(f"✨ Executed in {meta['time']:.4f}s • {total_rows:,} rows {cache_indicator}")
+                    
+                    # Pagination for large result sets
+                    if total_rows > MAX_RESULT_ROWS:
+                        st.warning(f"⚠️ Large result set ({total_rows:,} rows). Showing first {MAX_RESULT_ROWS:,} rows. Consider adding LIMIT to your query.")
+                        res_display = res.head(MAX_RESULT_ROWS)
+                    else:
+                        res_display = res
+                    
+                    # Display with pagination controls for very large sets
+                    if total_rows > PAGINATION_SIZE:
+                        # Initialize pagination state
+                        pagination_key = f"pagination_{st.session_state.current_notebook}_{cell['id']}"
+                        if pagination_key not in st.session_state:
+                            st.session_state[pagination_key] = 0
+                        
+                        page_num = st.session_state[pagination_key]
+                        page_data, _, total_pages = paginate_dataframe(res_display, page_num, PAGINATION_SIZE)
+                        
+                        # Pagination controls
+                        pag_col1, pag_col2, pag_col3 = st.columns([0.2, 0.6, 0.2])
+                        with pag_col1:
+                            if st.button("◀ Prev", key=f"prev_{cell['id']}", disabled=(page_num == 0)):
+                                st.session_state[pagination_key] = max(0, page_num - 1)
+                                st.rerun()
+                        with pag_col2:
+                            st.caption(f"Page {page_num + 1} of {total_pages}")
+                        with pag_col3:
+                            if st.button("Next ▶", key=f"next_{cell['id']}", disabled=(page_num >= total_pages - 1)):
+                                st.session_state[pagination_key] = min(total_pages - 1, page_num + 1)
+                                st.rerun()
+                        
+                        st.dataframe(page_data, use_container_width=True, hide_index=True)
+                    else:
+                        st.dataframe(res_display, use_container_width=True, hide_index=True)
                 elif res == "ERROR":
                     e_obj = active_cells[i].get("error", {})
                     st.divider()

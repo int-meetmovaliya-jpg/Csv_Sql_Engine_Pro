@@ -1,2 +1,12 @@
 [server]
-maxUploadSize = 5120
+headless = true
+enableCORS = false
+enableXsrfProtection = true
+maxUploadSize = 10737418240  # 10GB in bytes
+maxMessageSize = 10737418240  # 10GB in bytes
+
+[browser]
+gatherUsageStats = false
+
+[client]
+showErrorDetails = true

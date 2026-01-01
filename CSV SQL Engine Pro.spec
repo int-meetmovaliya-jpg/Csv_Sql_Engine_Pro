@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('ui_streamlit.py', '.'), ('versioning.py', '.'), ('macros.py', '.'), ('version.json', '.'), ('engine.py', '.'), ('ingestion.py', '.'), ('completer.py', '.'), ('native_window.py', '.')]
+datas = [('ui_streamlit.py', '.'), ('versioning.py', '.'), ('macros.py', '.'), ('version.json', '.'), ('engine.py', '.'), ('ingestion.py', '.'), ('completer.py', '.'), ('native_window.py', '.'), ('utils.py', '.')]
 binaries = []
 hiddenimports = ['PyQt5.QtCore', 'PyQt5.QtWidgets', 'PyQt5.QtWebEngineWidgets', 'PyQt5.QtGui']
 tmp_ret = collect_all('streamlit')
