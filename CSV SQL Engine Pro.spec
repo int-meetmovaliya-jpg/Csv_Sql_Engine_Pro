@@ -1,12 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('ui_streamlit.py', '.'), ('versioning.py', '.'), ('macros.py', '.'), ('version.json', '.'), ('engine.py', '.'), ('ingestion.py', '.'), ('completer.py', '.')]
+datas = [('ui_streamlit.py', '.'), ('versioning.py', '.'), ('macros.py', '.'), ('version.json', '.'), ('engine.py', '.'), ('ingestion.py', '.'), ('completer.py', '.'), ('native_window.py', '.')]
 binaries = []
-hiddenimports = []
+hiddenimports = ['PyQt5.QtCore', 'PyQt5.QtWidgets', 'PyQt5.QtWebEngineWidgets', 'PyQt5.QtGui']
 tmp_ret = collect_all('streamlit')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('duckdb')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('PyQt5')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 

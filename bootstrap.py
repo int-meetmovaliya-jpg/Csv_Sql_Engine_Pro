@@ -331,7 +331,7 @@ def perform_update(remote_data):
     return False
 
 def launch_app():
-    """Launch the main application"""
+    """Launch the main application in a native macOS window"""
     print("Launching CSV SQL Engine Pro...")
     
     # Determine the script path
@@ -340,14 +340,11 @@ def launch_app():
         if sys.platform == 'darwin':
             # macOS app bundle
             script_path = APP_DIR / "Resources" / "ui_streamlit.py"
-            python_exe = sys.executable
         else:
             script_path = APP_DIR / "ui_streamlit.py"
-            python_exe = sys.executable
     else:
         # Running as script
         script_path = APP_DIR / "ui_streamlit.py"
-        python_exe = sys.executable
     
     # Fallback if script not found in Resources
     if not script_path.exists():
@@ -364,26 +361,42 @@ def launch_app():
     # Change to app directory
     os.chdir(APP_DIR)
     
-    # Run streamlit
+    # Import and use native window launcher
     try:
-        process = subprocess.Popen([
-            python_exe, "-m", "streamlit", "run",
-            str(script_path),
-            "--server.port", "8503",
-            "--server.headless", "true",
-            "--server.address", "127.0.0.1"
-        ])
-        
-        # Open browser after a short delay
-        time.sleep(3)
+        from native_window import launch_native_app
+        launch_native_app(
+            script_path=str(script_path),
+            port=8503,
+            app_name="CSV SQL Engine Pro"
+        )
+    except ImportError as e:
+        print(f"Native window module not available: {e}")
+        print("Falling back to browser mode...")
+        # Fallback to browser mode
+        import subprocess
         import webbrowser
-        webbrowser.open("http://127.0.0.1:8503")
         
-        # Keep the bootstrap alive while streamlit is running
         try:
-            process.wait()
-        except KeyboardInterrupt:
-            process.terminate()
+            process = subprocess.Popen([
+                sys.executable, "-m", "streamlit", "run",
+                str(script_path),
+                "--server.port", "8503",
+                "--server.headless", "true",
+                "--server.address", "127.0.0.1"
+            ])
+            
+            time.sleep(3)
+            webbrowser.open("http://127.0.0.1:8503")
+            
+            try:
+                process.wait()
+            except KeyboardInterrupt:
+                process.terminate()
+        except Exception as err:
+            print(f"Error launching app: {err}")
+            messagebox.showerror("Error", f"Failed to launch application: {str(err)}")
+            import traceback
+            traceback.print_exc()
     except Exception as e:
         print(f"Error launching app: {e}")
         messagebox.showerror("Error", f"Failed to launch application: {str(e)}")
