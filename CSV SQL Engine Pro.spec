@@ -56,6 +56,6 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='CSV SQL Engine Pro.app',
-    icon=None,
-    bundle_identifier=None,
+    icon='app_icon.icns',
+    bundle_identifier='com.csvsql.engine.pro',
 )
